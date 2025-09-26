@@ -1,16 +1,64 @@
 import React from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend
+);
 
 const Analytics: React.FC = () => {
   // Sample data for analytics charts
-  const salesData = [
-    { month: 'Jan', revenue: 65000, orders: 120 },
-    { month: 'Feb', revenue: 59000, orders: 100 },
-    { month: 'Mar', revenue: 80000, orders: 150 },
-    { month: 'Apr', revenue: 81000, orders: 180 },
-    { month: 'May', revenue: 56000, orders: 95 },
-    { month: 'Jun', revenue: 55000, orders: 110 },
-  ];
+  const salesData = {
+    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+    datasets: [
+      {
+        label: 'Revenue ($)',
+        data: [65000, 59000, 80000, 81000, 56000, 55000],
+        backgroundColor: 'rgba(59, 130, 246, 0.5)',
+        borderColor: 'rgba(59, 130, 246, 1)',
+        borderWidth: 1,
+      },
+      {
+        label: 'Orders',
+        data: [120, 100, 150, 180, 95, 110],
+        backgroundColor: 'rgba(16, 185, 129, 0.5)',
+        borderColor: 'rgba(16, 185, 129, 1)',
+        borderWidth: 1,
+      },
+    ],
+  };
+
+  const chartOptions = {
+    responsive: true,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+      },
+      title: {
+        display: true,
+        text: 'Revenue & Orders Trend',
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+      },
+    },
+  };
 
   const inventoryMetrics = [
     { category: 'Electronics', turnover: 8.5, value: 245000 },
@@ -66,17 +114,9 @@ const Analytics: React.FC = () => {
             <h3 className="text-xl font-semibold text-gray-800 mb-4">
               Revenue & Orders Trend
             </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={salesData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="revenue" fill="#3B82F6" name="Revenue ($)" />
-                <Bar dataKey="orders" fill="#10B981" name="Orders" />
-              </BarChart>
-            </ResponsiveContainer>
+            <div style={{ height: '300px' }}>
+              <Bar data={salesData} options={chartOptions} />
+            </div>
           </div>
 
           {/* Inventory Categories */}
