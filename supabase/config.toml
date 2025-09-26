@@ -1,0 +1,193 @@
+# Supabase CLI Configuration
+# This file configures the local development environment for SupplyMind AI Platform
+
+project_id = "your-project-id"
+
+[api]
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+port = 54323
+api_url = "http://localhost:54321"
+
+[inbucket]
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+[storage]
+file_size_limit = "50MiB"
+
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+jwt_expiry = 3600
+enable_signup = true
+enable_email_confirmations = true
+enable_sms_confirmations = false
+enable_phone_signups = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+secure_email_change_enabled = true
+
+# Email templates
+[auth.email.template.invite]
+subject = "You have been invited to SupplyMind AI"
+content_path = "./supabase/templates/invite.html"
+
+[auth.email.template.confirmation]
+subject = "Confirm your SupplyMind AI account"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Reset your SupplyMind AI password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.magic_link]
+subject = "Your SupplyMind AI Magic Link"
+content_path = "./supabase/templates/magic-link.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your new email address"
+content_path = "./supabase/templates/email-change.html"
+
+# External provider configuration
+[auth.external.google]
+enabled = false
+client_id = "your-google-client-id"
+secret = "your-google-client-secret"
+redirect_uri = "http://localhost:54321/auth/v1/callback"
+
+[auth.external.github]
+enabled = false
+client_id = "your-github-client-id"
+secret = "your-github-client-secret"
+redirect_uri = "http://localhost:54321/auth/v1/callback"
+
+# Database Extensions
+[db.extensions]
+vector = {enabled = true, version = "0.5.1"}
+pg_stat_statements = {enabled = true}
+pgcrypto = {enabled = true}
+pgjwt = {enabled = true}
+uuid_ossp = {enabled = true}
+
+# Edge Functions
+[functions]
+verify_jwt = false
+
+[functions."ai-chat"]
+verify_jwt = true
+
+[functions."inventory-risk-analysis"]
+verify_jwt = true
+
+[functions."supplier-performance"]
+verify_jwt = true
+
+[functions."analytics-dashboard"]
+verify_jwt = true
+
+# Analytics and Monitoring
+[analytics]
+api_only = false
+ui_enabled = true
+backend = "postgres"
+
+# Development Environment
+[experimental]
+orientation = "horizontal"
+websocket_url = "ws://localhost:54321/realtime/v1/websocket"
+
+# Local Development Database
+[local_config]
+ip = "0.0.0.0"
+port = 54322
+max_connections = 100
+log_level = "warn"
+
+# Supabase Studio
+[dashboard]
+port = 54323
+username = "supabase"
+password = "this_password_is_insecure_and_should_be_updated"
+
+# Testing Configuration
+[test]
+port = 54325
+db = "postgres://postgres:postgres@localhost:54322/postgres"
+
+# Seed Configuration
+[seed]
+db_url = "postgresql://postgres:postgres@localhost:54322/postgres"
+sql_paths = [
+  "./seed.sql",
+  "./migrations/*.sql"
+]
+
+# Storage Configuration
+[storage.buckets.avatars]
+public = true
+file_size_limit = "1MB"
+allowed_mime_types = ["image/png", "image/jpeg", "image/gif"]
+
+[storage.buckets.documents]
+public = false
+file_size_limit = "10MB"
+allowed_mime_types = [
+  "application/pdf", 
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv"
+]
+
+[storage.buckets.inventory-images]
+public = true
+file_size_limit = "5MB"
+allowed_mime_types = ["image/png", "image/jpeg", "image/webp"]
+
+# AI/Vector Configuration
+[ai]
+max_embedding_dimensions = 1536
+vector_similarity_threshold = 0.8
+max_search_results = 50
+
+# Performance Tuning
+[performance]
+max_pool_size = 25
+pool_timeout = 10
+statement_timeout = 30000
+idle_in_transaction_session_timeout = 60000
+
+# Security Configuration
+[security]
+jwt_secret = "your-jwt-secret-key-here"
+anon_key = "your-anon-key-here"
+service_role_key = "your-service-role-key-here"
+
+# Environment-specific overrides
+[environments.development]
+debug = true
+log_level = "debug"
+enable_tracing = true
+
+[environments.staging]
+debug = false
+log_level = "info"
+enable_tracing = false
+
+[environments.production]
+debug = false
+log_level = "warn"
+enable_tracing = false
+max_connections = 200
