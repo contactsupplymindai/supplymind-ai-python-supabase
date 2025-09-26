@@ -1,285 +1,329 @@
-import time
-from typing import List, Dict, Any
+"""
+AI Copilot Views
 
-from django.db.models import Q
+Strict, database-only Q&A for Supply Chain using Supabase (SQL + vector search).
+- No hallucinations: answers must cite retrieved rows; otherwise reply with insufficiency message.
+- Wired endpoints: inventory, orders, risk, analytics via explicit SQL or RPC.
+- Clear documentation blocks explain retrieval, ranking, and response construction.
+
+Environment:
+- SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (service key required for RLS bypass server-side)
+- OPENAI/HF for embeddings only (optional), never used to fabricate facts beyond retrieved data
+
+"""
+import os
+import json
+import time
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
-from .models import ChatSession, ChatMessage, VectorEmbedding, ActionSuggestion
-from .serializers import (
-    ChatRequestSerializer,
-    ChatResponseSerializer,
-    EmbedRequestSerializer,
-    EmbedResponseSerializer,
-    SemanticSearchRequestSerializer,
-    SemanticSearchResponseSerializer,
-    SemanticSearchResultSerializer,
-    SuggestionRequestSerializer,
-    SuggestionResponseSerializer,
-    ActionSuggestionSerializer,
-)
+# Optional LLM libs for embeddings only
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DEFAULT_EMBED_MODEL = os.getenv("COPILOT_EMBED_MODEL", "text-embedding-3-small")
+
+# Supabase client
+from supabase import create_client, Client
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase: Optional[Client] = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# -----------------------------------------------------------------------------
+# Utility: Safe vector embeddings (optional)
+# -----------------------------------------------------------------------------
+
+def get_embedding(text: str) -> Optional[List[float]]:
+    """
+    Return embedding vector for text. If no provider configured, return None.
+    Embeddings are used ONLY for retrieval; never for generating facts.
+    """
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        e = client.embeddings.create(model=DEFAULT_EMBED_MODEL, input=text)
+        return e.data[0].embedding  # type: ignore
+    except Exception:
+        return None
+
+# -----------------------------------------------------------------------------
+# Retrieval Layer for Supply Chain
+# -----------------------------------------------------------------------------
+# All factual data comes from Supabase tables and SQL functions. If retrieval
+# returns no evidence, responses must indicate insufficient data.
+
+@dataclass
+class RetrievalResult:
+    source: str
+    rows: List[Dict[str, Any]]
+    query_ms: float
 
 
-# ---- Stub AI providers (OpenAI/HuggingFace) ----
-class LLMProvider:
-    """Stub for LLM chat completion provider."""
-
-    def chat(self, messages: List[Dict[str, str]], model: str = "gpt-4o-mini", temperature: float = 0.7, max_tokens: int = 1000) -> Dict[str, Any]:
-        # Stubbed response – replace with real OpenAI/HF call
-        user_last = next((m for m in reversed(messages) if m.get("role") == "user"), {"content": ""})
-        content = f"[stub:{model}] You said: {user_last.get('content','')[:500]}"
-        return {
-            "content": content,
-            "usage": {"prompt_tokens": 0, "completion_tokens": len(content.split()), "total_tokens": len(content.split())},
-            "model": model,
-        }
-
-
-class EmbeddingProvider:
-    """Stub for embedding generation provider."""
-
-    def embed(self, text: str, model: str = "text-embedding-3-small") -> List[float]:
-        # Deterministic pseudo-embedding for stub
-        import hashlib, math
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        # produce 64-dim vector
-        vec = [(h[i % len(h)] / 255.0) for i in range(64)]
-        # L2 normalize
-        norm = math.sqrt(sum(v*v for v in vec)) or 1.0
-        return [v / norm for v in vec]
-
-    @staticmethod
-    def similarity(a: List[float], b: List[float]) -> float:
-        # cosine similarity for L2-normalized vectors = dot product
-        return float(sum(x*y for x, y in zip(a, b)))
-
-
-llm_provider = LLMProvider()
-embedding_provider = EmbeddingProvider()
-
-
-# ---- API Views ----
-class ChatCopilotView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        start = time.time()
-        serializer = ChatRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        session = None
-        if data.get("session_id"):
-            try:
-                session = ChatSession.objects.get(id=data["session_id"])
-            except ChatSession.DoesNotExist:
-                return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+def run_sql(sql: str, params: Optional[Dict[str, Any]] = None) -> RetrievalResult:
+    """
+    Execute parameterized SQL via Supabase PostgREST RPC or raw SQL (via rest/rpc).
+    Falls back to table select patterns when needed.
+    """
+    if not supabase:
+        return RetrievalResult(source="supabase", rows=[], query_ms=0)
+    start = time.time()
+    # Supabase Python client does not support raw SQL directly; expect SQL encapsulated
+    # in Postgres functions exposed as RPC. If plain selects are detected, try to parse
+    # route to table queries. Lightweight router below handles common cases.
+    rows: List[Dict[str, Any]] = []
+    try:
+        sql_l = sql.strip().lower()
+        if sql_l.startswith("select") and " from inventory" in sql_l:
+            # naive router for inventory view
+            table = "inventory"
+            q = supabase.table(table).select("*")
+            if params and "sku" in params:
+                q = q.eq("sku", params["sku"])  # type: ignore
+            if params and "limit" in params:
+                q = q.limit(int(params["limit"]))  # type: ignore
+            data = q.execute().data
+            rows = data or []
+        elif sql_l.startswith("select") and " from orders" in sql_l:
+            table = "orders"
+            q = supabase.table(table).select("*")
+            if params and "order_id" in params:
+                q = q.eq("id", params["order_id"])  # type: ignore
+            if params and "status" in params:
+                q = q.eq("status", params["status"])  # type: ignore
+            if params and "limit" in params:
+                q = q.limit(int(params["limit"]))  # type: ignore
+            data = q.execute().data
+            rows = data or []
+        elif sql_l.startswith("select") and " from risk_events" in sql_l:
+            table = "risk_events"
+            q = supabase.table(table).select("*")
+            if params and "severity" in params:
+                q = q.gte("severity", params["severity"])  # type: ignore
+            if params and "since" in params:
+                q = q.gte("event_time", params["since"])  # type: ignore
+            data = q.execute().data
+            rows = data or []
+        elif sql_l.startswith("select") and " from analytics_metrics" in sql_l:
+            table = "analytics_metrics"
+            q = supabase.table(table).select("*")
+            if params and "metric" in params:
+                q = q.eq("metric", params["metric"])  # type: ignore
+            if params and "since" in params:
+                q = q.gte("ts", params["since"])  # type: ignore
+            data = q.execute().data
+            rows = data or []
         else:
-            session = ChatSession.objects.create(user=request.user if request.user.is_authenticated else None,
-                                                 session_name=data.get("context", {}).get("topic", ""),
-                                                 context_metadata=data.get("context", {}))
+            # Attempt RPC if provided
+            fn = params.get("rpc") if params else None
+            if fn:
+                res = supabase.rpc(fn, params.get("args", {})).execute()
+                rows = res.data or []
+    except Exception:
+        rows = []
+    return RetrievalResult(source="supabase", rows=rows, query_ms=(time.time() - start) * 1000)
 
-        # Build message history
-        history = [
-            {"role": m.role, "content": m.content}
-            for m in session.messages.order_by("timestamp").all()
-        ]
-        history.append({"role": "user", "content": data["message"]})
 
-        # Call LLM provider (stub)
-        llm_result = llm_provider.chat(history, model=data.get("model"), temperature=data.get("temperature"), max_tokens=data.get("max_tokens"))
-        assistant_text = llm_result["content"]
-
-        # Persist user and assistant messages
-        user_msg = ChatMessage.objects.create(session=session, role="user", content=data["message"]) 
-        asst_msg = ChatMessage.objects.create(session=session, role="assistant", content=assistant_text)
-        session.updated_at = timezone.now()
-        session.save(update_fields=["updated_at"]) 
-
-        resp = {
-            "response": assistant_text,
-            "session_id": str(session.id),
-            "message_id": str(asst_msg.id),
-            "token_usage": llm_result.get("usage", {}),
-            "model": llm_result.get("model"),
-            "processing_time": round(time.time() - start, 4),
+def vector_search(query: str, top_k: int = 8, threshold: float = 0.15) -> RetrievalResult:
+    """
+    Perform semantic search over embeddings table (supply_chain_embeddings) using
+    cosine similarity computed in SQL (requires a Postgres function or pgvector index).
+    Assumes a view or RPC 'match_embeddings' exists. If missing, returns empty.
+    """
+    if not supabase:
+        return RetrievalResult(source="vector", rows=[], query_ms=0)
+    start = time.time()
+    rows: List[Dict[str, Any]] = []
+    vec = get_embedding(query)
+    if not vec:
+        return RetrievalResult(source="vector", rows=[], query_ms=(time.time() - start) * 1000)
+    try:
+        # Expect a Postgres RPC: match_embeddings(query_embedding, top_k, threshold)
+        payload = {
+            "query_embedding": vec,
+            "match_count": top_k,
+            "threshold": threshold,
         }
-        return Response(ChatResponseSerializer(resp).data, status=status.HTTP_200_OK)
+        res = supabase.rpc("match_embeddings", payload).execute()
+        rows = res.data or []
+    except Exception:
+        rows = []
+    return RetrievalResult(source="vector", rows=rows, query_ms=(time.time() - start) * 1000)
 
+# -----------------------------------------------------------------------------
+# Response Construction with Strict Non-hallucination
+# -----------------------------------------------------------------------------
 
-class EmbedView(APIView):
+def format_answer(question: str, evidences: List[RetrievalResult]) -> Dict[str, Any]:
+    """
+    Build an answer solely from evidence rows. If no rows, return insufficiency.
+    Include citations and the exact origin tables/ids used.
+    """
+    total_rows = sum(len(e.rows) for e in evidences)
+    if total_rows == 0:
+        return {
+            "answer": "Insufficient data in supply chain database to answer. Please refine your query.",
+            "citations": [],
+            "sources": [e.source for e in evidences],
+        }
+
+    snippets: List[str] = []
+    citations: List[Dict[str, Any]] = []
+
+    for ev in evidences:
+        for row in ev.rows:
+            # Create compact human-readable snippets
+            key_fields = []
+            for k in ["sku", "id", "order_no", "status", "quantity", "location", "metric", "value", "severity"]:
+                if k in row and row[k] is not None:
+                    key_fields.append(f"{k}={row[k]}")
+            if key_fields:
+                snippets.append("; ".join(key_fields))
+            citations.append({"source": ev.source, "row": row})
+
+    # Aggregate into answer text
+    answer = "Based on Supabase data: " + "; ".join(snippets[:10])
+    return {
+        "answer": answer,
+        "citations": citations,
+        "sources": [e.source for e in evidences],
+    }
+
+# -----------------------------------------------------------------------------
+# Views
+# -----------------------------------------------------------------------------
+
+class CopilotChatView(APIView):
     permission_classes = [AllowAny]
+
+    """
+    Copilot chat that ONLY answers from Supabase supply chain DB via:
+    - SQL table queries: inventory, orders, risk_events, analytics_metrics
+    - Vector search: supply_chain_embeddings via RPC 'match_embeddings'
+    If retrieval yields nothing, returns an insufficiency message. No free-form LLM.
+
+    Request schema:
+    { "question": str, "filters": {optional}, "top_k": int? }
+    Response schema:
+    { "answer": str, "citations": list, "sources": list, "retrieval_ms": float }
+    """
 
     def post(self, request):
         start = time.time()
-        serializer = EmbedRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+        body = request.data or {}
+        question: str = (body.get("question") or "").strip()
+        filters: Dict[str, Any] = body.get("filters") or {}
+        top_k: int = int(body.get("top_k") or 8)
 
-        text = data["text"]
-        model = data.get("model")
-        vector = embedding_provider.embed(text, model=model)
+        # Simple intent routing to supply chain domains
+        intents: List[Tuple[str, str, Dict[str, Any]]] = []
+        ql = question.lower()
+        if any(w in ql for w in ["stock", "inventory", "sku", "warehouse", "on hand", "reorder"]):
+            intents.append(("inventory", "select * from inventory", {**filters, "limit": top_k}))
+        if any(w in ql for w in ["order", "fulfill", "shipment", "backorder", "eta", "delivery"]):
+            intents.append(("orders", "select * from orders", {**filters, "limit": top_k}))
+        if any(w in ql for w in ["risk", "disruption", "delay", "incident", "alert"]):
+            intents.append(("risk_events", "select * from risk_events", {**filters}))
+        if any(w in ql for w in ["kpi", "metric", "fill rate", "otif", "forecast", "trend", "analytics"]):
+            intents.append(("analytics_metrics", "select * from analytics_metrics", {**filters}))
 
-        # content hash to avoid duplicates
-        import hashlib
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # Always attempt vector search for semantic grounding
+        evidences: List[RetrievalResult] = []
+        evidences.append(vector_search(question, top_k=min(top_k, 10)))
+        for domain, sql, params in intents:
+            ev = run_sql(sql, params)
+            ev.source = domain
+            evidences.append(ev)
 
-        embedding = VectorEmbedding.objects.create(
-            content=text,
-            content_hash=content_hash,
-            embedding_vector=vector,
-            embedding_model=model,
-            source_type=data.get("source_type"),
-            source_id=data.get("source_id") or "",
-            metadata=data.get("metadata") or {},
-        )
-
-        resp = {
-            "embedding_id": str(embedding.id),
-            "vector": vector,
-            "model": model,
-            "token_count": len(text.split()),
-            "processing_time": round(time.time() - start, 4),
-        }
-        return Response(EmbedResponseSerializer(resp).data, status=status.HTTP_201_CREATED)
+        answer = format_answer(question, evidences)
+        total_ms = round((time.time() - start) * 1000, 2)
+        answer["retrieval_ms"] = total_ms
+        return Response(answer, status=status.HTTP_200_OK)
 
 
-class SemanticSearchView(APIView):
+class InventoryView(APIView):
     permission_classes = [AllowAny]
+    """Inventory endpoint backed strictly by Supabase inventory table."""
 
-    def post(self, request):
-        start = time.time()
-        serializer = SemanticSearchRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        query_vec = embedding_provider.embed(data["query"])  # same default model as stub
-
-        # Base queryset
-        qs = VectorEmbedding.objects.all()
-        if data.get("source_types"):
-            qs = qs.filter(source_type__in=data["source_types"]) 
-        # Additional filters
-        filters = data.get("filters") or {}
-        for key, value in filters.items():
-            # Simple equality filters on metadata fields when stored as JSON
-            qs = qs.filter(**{f"metadata__{key}": value})
-
-        # Compute similarity in memory for stub (for production use vector DB / pgvector)
-        results = []
-        top_k = data.get("top_k")
-        include_embeddings = data.get("include_embeddings")
-        threshold = data.get("threshold")
-        for e in qs.iterator():
-            sim = EmbeddingProvider.similarity(query_vec, e.embedding_vector)
-            if sim >= threshold:
-                item = {
-                    "content": e.content,
-                    "similarity_score": float(sim),
-                    "source_type": e.source_type,
-                    "source_id": e.source_id,
-                    "metadata": e.metadata,
-                    "embedding_id": str(e.id),
-                }
-                if include_embeddings:
-                    item["embedding_vector"] = e.embedding_vector
-                results.append(item)
-
-        # Sort by similarity desc and trim
-        results.sort(key=lambda r: r["similarity_score"], reverse=True)
-        results = results[:top_k]
-
-        resp = {
-            "results": results,
-            "query_embedding": query_vec if include_embeddings else None,
-            "total_results": len(results),
-            "processing_time": round(time.time() - start, 4),
-        }
-        return Response(SemanticSearchResponseSerializer(resp).data, status=status.HTTP_200_OK)
+    def get(self, request):
+        sku = request.query_params.get("sku")
+        limit = int(request.query_params.get("limit") or 100)
+        sql = "select * from inventory"
+        params = {"sku": sku, "limit": limit}
+        ev = run_sql(sql, params)
+        return Response({"rows": ev.rows, "query_ms": ev.query_ms}, status=status.HTTP_200_OK)
 
 
-class SuggestionView(APIView):
+class OrdersView(APIView):
     permission_classes = [AllowAny]
+    """Orders endpoint backed strictly by Supabase orders table."""
 
-    def post(self, request):
-        start = time.time()
-        serializer = SuggestionRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        context = data["context"]
-        types = set((data.get("suggestion_types") or ["workflow", "optimization", "alert", "recommendation"]))
-        max_suggestions = data.get("max_suggestions")
-        min_conf = data.get("min_confidence")
-
-        # Simple heuristic stub creating suggestions based on context keys
-        suggestions: List[ActionSuggestion] = []
-        base_candidates = []
-        if "errors" in context:
-            base_candidates.append({
-                "suggestion_type": "alert",
-                "title": "Investigate elevated error rates",
-                "description": "Error logs indicate anomalies. Propose root-cause analysis and alert thresholds.",
-                "priority": "high",
-                "confidence_score": 0.82,
-            })
-        if "latency_ms" in context and context["latency_ms"] > 500:
-            base_candidates.append({
-                "suggestion_type": "optimization",
-                "title": "Optimize slow queries",
-                "description": "High latency detected. Suggest indexing, caching, or query optimization.",
-                "priority": "medium",
-                "confidence_score": 0.75,
-            })
-        if "todo" in context:
-            base_candidates.append({
-                "suggestion_type": "workflow",
-                "title": "Generate task plan",
-                "description": "Convert TODO items into an actionable, prioritized plan.",
-                "priority": "medium",
-                "confidence_score": 0.7,
-            })
-        if not base_candidates:
-            base_candidates.append({
-                "suggestion_type": "recommendation",
-                "title": "No obvious issues detected",
-                "description": "Monitor metrics and set up automated alerts for thresholds.",
-                "priority": "low",
-                "confidence_score": 0.6,
-            })
-
-        # Filter by requested types and min confidence
-        filtered = [c for c in base_candidates if c["suggestion_type"] in types and c["confidence_score"] >= min_conf]
-        filtered = filtered[:max_suggestions]
-
-        created_objs = []
-        for c in filtered:
-            obj = ActionSuggestion.objects.create(
-                user=request.user if request.user.is_authenticated else None,
-                suggestion_type=c["suggestion_type"],
-                title=c["title"],
-                description=c["description"],
-                priority=c["priority"],
-                confidence_score=c["confidence_score"],
-                context_data=context,
-                action_payload={"proposed_actions": []},
-            )
-            created_objs.append(obj)
-
-        resp = {
-            "suggestions": ActionSuggestionSerializer(created_objs, many=True).data,
-            "total_suggestions": len(created_objs),
-            "processing_time": round(time.time() - start, 4),
-            "context_analysis": {"keys": list(context.keys())},
-        }
-        return Response(SuggestionResponseSerializer(resp).data, status=status.HTTP_200_OK)
+    def get(self, request):
+        order_id = request.query_params.get("order_id")
+        status_f = request.query_params.get("status")
+        limit = int(request.query_params.get("limit") or 100)
+        sql = "select * from orders"
+        params = {"order_id": order_id, "status": status_f, "limit": limit}
+        ev = run_sql(sql, params)
+        return Response({"rows": ev.rows, "query_ms": ev.query_ms}, status=status.HTTP_200_OK)
 
 
-# URL wiring for this microservice will import these views
-ChatCopilot = ChatCopilotView.as_view()
-Embed = EmbedView.as_view()
-SemanticSearch = SemanticSearchView.as_view()
-Suggest = SuggestionView.as_view()
+class RiskView(APIView):
+    permission_classes = [AllowAny]
+    """Risk events endpoint backed strictly by Supabase risk_events table."""
+
+    def get(self, request):
+        severity = request.query_params.get("severity")
+        since = request.query_params.get("since")
+        sql = "select * from risk_events"
+        params = {"severity": severity, "since": since}
+        ev = run_sql(sql, params)
+        return Response({"rows": ev.rows, "query_ms": ev.query_ms}, status=status.HTTP_200_OK)
+
+
+class AnalyticsView(APIView):
+    permission_classes = [AllowAny]
+    """Analytics metrics endpoint backed strictly by Supabase analytics_metrics table."""
+
+    def get(self, request):
+        metric = request.query_params.get("metric")
+        since = request.query_params.get("since")
+        sql = "select * from analytics_metrics"
+        params = {"metric": metric, "since": since}
+        ev = run_sql(sql, params)
+        return Response({"rows": ev.rows, "query_ms": ev.query_ms}, status=status.HTTP_200_OK)
+
+
+# -----------------------------------------------------------------------------
+# Documentation block: AI data retrieval logic
+# -----------------------------------------------------------------------------
+"""
+AI Retrieval Logic (Supply Chain Only)
+
+1) Input Parsing
+   - Extract 'question' and optional 'filters'.
+   - Derive domain intents (inventory, orders, risk, analytics) via keyword routing.
+
+2) Retrieval
+   - Execute SQL table queries via Supabase for each relevant domain.
+   - Perform semantic vector search via RPC 'match_embeddings' using OpenAI embeddings if available.
+
+3) Evidence Consolidation
+   - Combine rows from all retrievals; compute compact snippets for answer.
+
+4) Strict Answering
+   - If no rows found, respond with insufficiency message; NO LLM generation.
+   - Otherwise, answer is a structured summary of retrieved rows with citations.
+
+5) Safety and Scope
+   - Facts must come from Supabase tables (inventory, orders, risk_events, analytics_metrics) or embeddings matches.
+   - Never fabricate values; do not infer beyond rows. Include row-level citation objects.
+"""
