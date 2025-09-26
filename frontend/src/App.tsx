@@ -6,13 +6,13 @@ import { supabase } from './lib/supabase';
 import { useAuthStore } from './store/authStore';
 import { useEffect } from 'react';
 
-// Page Components
-import LoginPage from './pages/auth/LoginPage';
-import DashboardPage from './pages/dashboard/DashboardPage';
-import InventoryPage from './pages/inventory/InventoryPage';
-import AnalyticsPage from './pages/analytics/AnalyticsPage';
-import ChatPage from './pages/chat/ChatPage';
-import SettingsPage from './pages/settings/SettingsPage';
+// Page Components - CORRECTED IMPORT PATHS
+import LoginPage from './pages/LoginPage';
+import Dashboard from './pages/Dashboard';
+import Inventory from './pages/Inventory';
+import Analytics from './pages/Analytics';
+import Chat from './pages/Chat';
+import SettingsPage from './pages/SettingsPage';
 
 // Styles
 import './globals.css';
@@ -93,7 +93,7 @@ function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <DashboardPage />
+                  <Dashboard />
                 </ProtectedRoute>
               }
             />
@@ -101,7 +101,7 @@ function App() {
               path="/inventory"
               element={
                 <ProtectedRoute>
-                  <InventoryPage />
+                  <Inventory />
                 </ProtectedRoute>
               }
             />
@@ -109,7 +109,7 @@ function App() {
               path="/analytics"
               element={
                 <ProtectedRoute>
-                  <InventoryPage />
+                  <Analytics />
                 </ProtectedRoute>
               }
             />
@@ -117,7 +117,7 @@ function App() {
               path="/chat"
               element={
                 <ProtectedRoute>
-                  <ChatPage />
+                  <Chat />
                 </ProtectedRoute>
               }
             />
