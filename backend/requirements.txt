@@ -1,0 +1,120 @@
+# SupplyMind AI Backend Requirements
+# Core Django Framework
+Django==4.2.7
+djangorestframework==3.14.0
+djangorestframework-simplejwt==5.3.0
+django-cors-headers==4.3.1
+django-environ==0.11.2
+django-celery-beat==2.5.0
+django-redis==5.4.0
+django-extensions==3.2.3
+
+# Database & Supabase
+supabase==2.0.2
+psycopg2-binary==2.9.7
+postgresql-client==0.0.1
+
+# Authentication & Security
+PyJWT==2.8.0
+cryptography==41.0.7
+bcrypt==4.0.1
+passlib==1.7.4
+django-oauth-toolkit==1.7.1
+
+# API Documentation
+drf-spectacular==0.26.5
+drf-spectacular-sidecar==2023.10.1
+swagger-ui-bundle==0.0.9
+
+# Task Queue & Background Jobs
+celery==5.3.4
+redis==5.0.1
+kombu==5.3.4
+billiard==4.2.0
+
+# Machine Learning & AI
+scikit-learn==1.3.2
+pandas==2.1.3
+numpy==1.24.4
+scipy==1.11.4
+tensorflow==2.15.0
+torch==2.1.1
+transformers==4.35.2
+langchain==0.0.340
+langchain-community==0.0.5
+chromadb==0.4.17
+openai==1.3.5
+sentence-transformers==2.2.2
+
+# Data Processing & Analytics
+pandas==2.1.3
+numpy==1.24.4
+matplotlib==3.8.2
+seaborn==0.13.0
+plotly==5.17.0
+sqlalchemy==2.0.23
+
+# HTTP Clients & Async
+requests==2.31.0
+httpx==0.25.2
+aiohttp==3.9.1
+uvicorn==0.24.0
+gunicorn==21.2.0
+
+# Monitoring & Logging
+sentry-sdk==1.38.0
+prometheus-client==0.19.0
+django-prometheus==2.3.1
+loguru==0.7.2
+structlog==23.2.0
+
+# Development & Testing
+pytest==7.4.3
+pytest-django==4.7.0
+pytest-cov==4.1.0
+factory-boy==3.3.0
+faker==20.1.0
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
+django-debug-toolbar==4.2.0
+django-silk==5.0.4
+
+# Utilities
+python-decouple==3.8
+python-dotenv==1.0.0
+pillow==10.1.0
+click==8.1.7
+rich==13.7.0
+tqdm==4.66.1
+pytz==2023.3
+dateutil==2.8.2
+pydantic==2.5.0
+marshmallow==3.20.1
+
+# File Handling & Storage
+boto3==1.34.0
+django-storages==1.14.2
+openpyxl==3.1.2
+csv-reader==1.2.0
+
+# Email & Notifications
+django-ses==3.5.0
+twilio==8.10.0
+sendgrid==6.11.0
+
+# Caching
+django-cache-machine==1.2.0
+memcached==1.59
+
+# DevOps & Deployment
+Docker==6.1.3
+docker-compose==1.29.2
+kubernetes==28.1.0
+terraform==1.0.0
+
+# Environment specific
+whitenoise==6.6.0
+dj-database-url==2.1.0
+django-heroku==0.3.1
