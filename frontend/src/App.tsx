@@ -6,10 +6,6 @@ import { supabase } from './lib/supabase';
 import { useAuthStore } from './store/authStore';
 import { useEffect } from 'react';
 
-// Layout Components
-import Sidebar from './components/layout/Sidebar';
-import Header from './components/layout/Header';
-
 // Page Components
 import LoginPage from './pages/auth/LoginPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
@@ -37,12 +33,32 @@ interface ProtectedRouteProps {
 }
 
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { user, loading } = useAuthStore();
+  const { user, loading, initialize } = useAuthStore();
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          useAuthStore.getState().setUser(session.user);
+        } else if (event === 'SIGNED_OUT') {
+          useAuthStore.getState().setUser(null);
+        }
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
       </div>
     );
   }
@@ -52,132 +68,69 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   }
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <Header />
-        <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-6">
-          {children}
-        </main>
+    <div className="min-h-screen bg-gray-50">
+      <div className="flex">
+        {/* Sidebar removed for now */}
+        <div className="flex-1">
+          {/* Header removed for now */}
+          <main className="p-6">
+            {children}
+          </main>
+        </div>
       </div>
     </div>
   );
 };
 
-// Main App Component
-const App: React.FC = () => {
-  const { setUser, setLoading, user } = useAuthStore();
-
-  useEffect(() => {
-    // Check initial auth state
-    const checkAuth = async () => {
-      try {
-        setLoading(true);
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (error) {
-          console.error('Error checking auth:', error);
-          setUser(null);
-        } else {
-          setUser(session?.user || null);
-        }
-      } catch (error) {
-        console.error('Auth check failed:', error);
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkAuth();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth state changed:', event, session?.user?.id);
-        setUser(session?.user || null);
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [setUser, setLoading]);
-
+function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <Router>
         <div className="App">
           <Routes>
-            {/* Public Routes */}
-            <Route 
-              path="/login" 
-              element={
-                user ? <Navigate to="/dashboard" replace /> : <LoginPage />
-              } 
-            />
-            
-            {/* Protected Routes */}
-            <Route 
-              path="/dashboard" 
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/dashboard"
               element={
                 <ProtectedRoute>
                   <DashboardPage />
                 </ProtectedRoute>
-              } 
+              }
             />
-            <Route 
-              path="/inventory" 
+            <Route
+              path="/inventory"
               element={
                 <ProtectedRoute>
                   <InventoryPage />
                 </ProtectedRoute>
-              } 
+              }
             />
-            <Route 
-              path="/analytics" 
+            <Route
+              path="/analytics"
               element={
                 <ProtectedRoute>
-                  <AnalyticsPage />
+                  <InventoryPage />
                 </ProtectedRoute>
-              } 
+              }
             />
-            <Route 
-              path="/chat" 
+            <Route
+              path="/chat"
               element={
                 <ProtectedRoute>
                   <ChatPage />
                 </ProtectedRoute>
-              } 
+              }
             />
-            <Route 
-              path="/settings" 
+            <Route
+              path="/settings"
               element={
                 <ProtectedRoute>
                   <SettingsPage />
                 </ProtectedRoute>
-              } 
+              }
             />
-            
-            {/* Default redirect */}
-            <Route 
-              path="/" 
-              element={
-                <Navigate to={user ? "/dashboard" : "/login"} replace />
-              } 
-            />
-            
-            {/* Catch all route */}
-            <Route 
-              path="*" 
-              element={
-                <Navigate to={user ? "/dashboard" : "/login"} replace />
-              } 
-            />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
           </Routes>
-          
-          {/* Toast notifications */}
           <Toaster
             position="top-right"
             toastOptions={{
@@ -186,22 +139,12 @@ const App: React.FC = () => {
                 background: '#363636',
                 color: '#fff',
               },
-              success: {
-                style: {
-                  background: '#10b981',
-                },
-              },
-              error: {
-                style: {
-                  background: '#ef4444',
-                },
-              },
             }}
           />
         </div>
       </Router>
     </QueryClientProvider>
   );
-};
+}
 
 export default App;
